@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Assignment Portal</title>
+<style>
+:root{--bg:#f6f8f9;--card:#fff;--ink:#16222e;--mute:#5d6b78;--line:#dbe2e7;--acc:#0d6b61;--bad:#b3261e}
+@media(prefers-color-scheme:dark){:root{--bg:#10171d;--card:#18222b;--ink:#e6edf2;--mute:#93a3b0;--line:#2a3742;--acc:#4fc3b4;--bad:#ff8a80}}
+*{box-sizing:border-box}body{margin:0;font:16px/1.5 system-ui,sans-serif;background:var(--bg);color:var(--ink)}
+header{display:flex;justify-content:space-between;align-items:center;padding:14px 24px;background:var(--card);border-bottom:1px solid var(--line)}
+main{max-width:860px;margin:24px auto;padding:0 16px}
+h1,h2,h3{margin:0 0 8px}h1{font-size:1.2rem}h2{font-size:1.15rem}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:16px;margin-bottom:14px}
+input,textarea,select{width:100%;padding:9px;margin:4px 0 12px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink);font:inherit}
+button{padding:9px 16px;border:0;border-radius:6px;background:var(--acc);color:#fff;font:inherit;cursor:pointer}
+button.ghost{background:transparent;color:var(--acc);border:1px solid var(--acc)}
+:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+.row{display:flex;gap:12px;flex-wrap:wrap}.row>*{flex:1;min-width:140px}
+.mute{color:var(--mute);font-size:.9rem}.err{color:var(--bad);min-height:1.4em}
+.tag{display:inline-block;padding:2px 8px;border-radius:99px;font-size:.8rem;border:1px solid var(--line)}
+.ok{color:var(--acc)}table{width:100%;border-collapse:collapse}td,th{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line);vertical-align:top}
+a{color:var(--acc)}.auth{max-width:400px;margin:60px auto}
+</style></head><body>
+<header><h1>Assignment Portal</h1><div id="who"></div></header>
+<main id="app"></main>
+<script>
+const $ = s => document.querySelector(s);
+let session = JSON.parse(localStorage.getItem("session") || "null");
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const fmt = iso => new Date(iso).toLocaleString([], {dateStyle:"medium", timeStyle:"short"});
+
+async function api(path, opts = {}) {
+  opts.headers = {...(opts.headers||{}), ...(session ? {Authorization: "Bearer " + session.token} : {})};
+  if (opts.json) { opts.body = JSON.stringify(opts.json); opts.headers["Content-Type"] = "application/json"; opts.method = opts.method || "POST"; }
+  const r = await fetch("/api" + path, opts);
+  const data = await r.json().catch(() => ({}));
+  if (r.status === 401 && session) { logout(); }
+  if (!r.ok) throw new Error(data.error || "Something went wrong.");
+  return data;
+}
+function logout() { session = null; localStorage.removeItem("session"); render(); }
+function setSession(d) { session = d; localStorage.setItem("session", JSON.stringify(d)); render(); }
+
+function render() {
+  $("#who").innerHTML = session ? `${esc(session.name)} <span class="tag">${session.role}</span> <button class="ghost" onclick="logout()">Sign out</button>` : "";
+  if (!session) return renderAuth();
+  session.role === "teacher" ? renderTeacher() : renderStudent();
+}
+
+function renderAuth() {
+  $("#app").innerHTML = `<div class="card auth"><h2 id="t">Sign in</h2>
+  <label>Name<input id="name" style="display:none" autocomplete="name"></label>
+  <label>Email<input id="email" type="email" autocomplete="email"></label>
+  <label>Password<input id="pw" type="password" autocomplete="current-password"></label>
+  <label id="rl" style="display:none">I am a<select id="role"><option value="student">Student</option><option value="teacher">Teacher</option></select></label>
+  <div class="err" id="err"></div>
+  <button id="go">Sign in</button> <button class="ghost" id="sw">Create an account</button></div>`;
+  let reg = false;
+  const sync = () => {
+    $("#t").textContent = reg ? "Create an account" : "Sign in";
+    $("#go").textContent = reg ? "Create account" : "Sign in";
+    $("#sw").textContent = reg ? "I already have an account" : "Create an account";
+    $("#name").parentElement.style.display = reg ? "" : "none";
+    $("#name").style.display = reg ? "" : "none";
+    $("#rl").style.display = reg ? "" : "none";
+  };
+  $("#sw").onclick = () => { reg = !reg; sync(); };
+  $("#go").onclick = async () => {
+    $("#err").textContent = "";
+    try {
+      const body = {email: $("#email").value, password: $("#pw").value};
+      if (reg) Object.assign(body, {name: $("#name").value, role: $("#role").value});
+      setSession(await api(reg ? "/register" : "/login", {json: body}));
+    } catch (e) { $("#err").textContent = e.message; }
+  };
+  sync();
+}
+
+/* ---------- Student ---------- */
+async function renderStudent() {
+  const list = await api("/assignments");
+  $("#app").innerHTML = `<h2>Your assignments</h2>` + (list.length ? list.map(a => {
+    const closed = new Date() > new Date(a.deadline);
+    return `<div class="card"><div class="row" style="justify-content:space-between"><h3>${esc(a.title)}</h3>
+      <span class="mute" style="text-align:right">Due ${fmt(a.deadline)}<br>${esc(a.teacher)}</span></div>
+      <p>${esc(a.description)}</p>
+      ${a.submission_id ? `<p class="ok">Submitted ${fmt(a.submitted_at)}: <a href="#" onclick="dl(${a.submission_id});return false">${esc(a.filename)}</a></p>` : ""}
+      ${a.marks != null ? `<p><b>${a.marks}/${a.max_marks}</b> ${a.feedback ? " - " + esc(a.feedback) : ""}</p>` : ""}
+      ${closed ? `<p class="mute">Submissions closed.</p>` :
+      `<div class="row"><input type="file" id="f${a.id}"><button onclick="upload(${a.id})">${a.submission_id ? "Replace file" : "Submit"}</button></div>
+       <div class="err" id="e${a.id}"></div>`}</div>`;
+  }).join("") : `<p class="mute">No assignments yet. Your teachers' assignments will appear here.</p>`);
+}
+async function upload(id) {
+  const f = $("#f" + id).files[0], fd = new FormData(); if (f) fd.append("file", f);
+  try { await api(`/assignments/${id}/submit`, {method: "POST", body: fd}); renderStudent(); }
+  catch (e) { $("#e" + id).textContent = e.message; }
+}
+async function dl(sid) {
+  const r = await fetch(`/api/submissions/${sid}/file`, {headers: {Authorization: "Bearer " + session.token}});
+  if (!r.ok) return alert("Could not download the file.");
+  const name = (r.headers.get("Content-Disposition") || "").match(/filename\*?=(?:UTF-8'')?"?([^";]+)/)?.[1] || "submission";
+  const a = document.createElement("a"); a.href = URL.createObjectURL(await r.blob()); a.download = decodeURIComponent(name); a.click();
+}
+
+/* ---------- Teacher ---------- */
+async function renderTeacher() {
+  const list = await api("/assignments");
+  $("#app").innerHTML = `<div class="card"><h2>New assignment</h2>
+    <label>Title<input id="ti"></label><label>Description<textarea id="de" rows="3"></textarea></label>
+    <div class="row"><label>Deadline<input id="dl" type="datetime-local"></label><label>Max marks<input id="mm" type="number" value="100"></label></div>
+    <div class="err" id="err"></div><button onclick="createA()">Publish assignment</button></div>
+    <h2>Your assignments</h2>` + (list.length ? list.map(a => `<div class="card">
+      <div class="row" style="justify-content:space-between"><h3>${esc(a.title)}</h3>
+      <span class="mute" style="text-align:right">Due ${fmt(a.deadline)}<br>${a.submitted} submitted</span></div>
+      <button class="ghost" onclick="toggle(${a.id})">View submissions</button><div id="s${a.id}"></div></div>`).join("")
+      : `<p class="mute">Publish your first assignment above.</p>`);
+}
+async function createA() {
+  try {
+    const d = $("#dl").value; if (!d) throw new Error("Pick a deadline.");
+    await api("/assignments", {json: {title: $("#ti").value, description: $("#de").value, deadline: new Date(d).toISOString(), max_marks: $("#mm").value}});
+    renderTeacher();
+  } catch (e) { $("#err").textContent = e.message; }
+}
+async function toggle(id) {
+  const box = $("#s" + id); if (box.innerHTML) { box.innerHTML = ""; return; }
+  const subs = await api(`/assignments/${id}/submissions`);
+  box.innerHTML = subs.length ? `<table><tr><th>Student</th><th>File</th><th>Marks</th><th>Feedback</th><th></th></tr>` +
+    subs.map(s => `<tr><td>${esc(s.name)}<br><span class="mute">${esc(s.email)}</span></td>
+    <td><a href="#" onclick="dl(${s.id});return false">${esc(s.filename)}</a><br><span class="mute">${fmt(s.submitted_at)}</span></td>
+    <td><input id="m${s.id}" type="number" value="${s.marks ?? ""}" style="width:70px"></td>
+    <td><input id="fb${s.id}" value="${esc(s.feedback)}"></td>
+    <td><button onclick="gradeIt(${s.id},${id})">Save</button></td></tr>`).join("") + `</table><div class="err" id="ge${id}"></div>`
+    : `<p class="mute">No submissions yet.</p>`;
+}
+async function gradeIt(sid, aid) {
+  try { await api(`/submissions/${sid}/grade`, {json: {marks: $("#m" + sid).value, feedback: $("#fb" + sid).value}}); $("#ge" + aid).textContent = ""; }
+  catch (e) { $("#ge" + aid).textContent = e.message; }
+}
+render();
+</script></body></html>
